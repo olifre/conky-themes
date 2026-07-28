@@ -7,7 +7,7 @@ local CACHE_DURATION = 9 -- Seconds
 function conky_find_sensors()
     hwmon_map = {} 
     
-    for i = 0, 15 do
+    for i = 0, 32 do
         local path = "/sys/class/hwmon/hwmon" .. i
         local nf = io.open(path .. "/name", "r")
         
@@ -58,12 +58,28 @@ function conky_find_sensors()
     end
 end
 
-function conky_get_hw_val(dev_name, s_type, key)
+function conky_get_hw_val(requested_dev_name, s_type, key)
     if not hwmon_map or next(hwmon_map) == nil then 
         conky_find_sensors() 
     end
     
-    local dev = hwmon_map[dev_name]
+    -- --- PATTERN MATCHING FOR DYNAMIC NAMES ---
+    -- We look for a device that matches the requested name, ignoring any trailing _ID
+    -- Helps with kernels 7.1.5 and above due to https://lore.kernel.org/all/3070412.e9J7NaK4W3@rafael.j.wysocki/
+    local dev = nil
+    local actual_dev_name = nil
+    
+    for actual_name, data in pairs(hwmon_map) do
+        -- Escapes dashes in the name and checks if the real name
+        -- starts with the requested name, followed by nothing or an underscore + digits
+        local escaped_req = requested_dev_name:gsub("%-", "%%-")
+        if actual_name:match("^" .. escaped_req .. "$") or actual_name:match("^" .. escaped_req .. "_%d+$") then
+            dev = data
+            actual_dev_name = actual_name
+            break
+        end
+    end
+    
     if not dev then return "N/A" end
     
     local type_table = dev[s_type]
@@ -74,7 +90,8 @@ function conky_get_hw_val(dev_name, s_type, key)
     if not sensor_num then return "N/A" end
     
     -- --- CACHING LOGIC ---
-    local cache_key = dev_name .. s_type .. key
+    -- We cache using the actual dynamic name to prevent cross-contamination if IDs shift mid-session
+    local cache_key = actual_dev_name .. s_type .. key
     local current_time = os.time()
     
     if cache[cache_key] and (current_time - cache[cache_key].timestamp < CACHE_DURATION) then
